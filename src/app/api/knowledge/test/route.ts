@@ -73,6 +73,7 @@ Your answer here...
 
     const openai = new OpenAI({
       apiKey: settings.aiApiKey,
+      ...(settings.aiBaseUrl ? { baseURL: settings.aiBaseUrl } : {}),
     });
 
     const completion = await openai.chat.completions.create({

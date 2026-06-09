@@ -123,3 +123,22 @@ export async function setupTelegramWebhook(
     return false;
   }
 }
+
+/**
+ * Public function to send Telegram message without manually fetching token.
+ */
+export async function sendTelegram(
+  chatIdStr: string,
+  message: string
+): Promise<boolean> {
+  try {
+    const token = await getTelegramToken();
+    if (!token) return false;
+    const chatId = Number(chatIdStr);
+    if (isNaN(chatId)) return false;
+    return sendTelegramMessage(token, chatId, message);
+  } catch (error) {
+    logger.error("[Telegram] Failed to send Telegram message:", error);
+    return false;
+  }
+}

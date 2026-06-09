@@ -2,6 +2,9 @@ import { Header } from "@/components/layout/header";
 import { StatCard } from "@/components/ui/stat-card";
 import { OnboardingChecklist } from "@/components/ui/onboarding-checklist";
 import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
+
 import {
   MessageSquare,
   Ticket,

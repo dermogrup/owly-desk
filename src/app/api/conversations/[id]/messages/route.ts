@@ -86,6 +86,30 @@ export async function POST(
       data: { updatedAt: new Date() },
     });
 
+    // Dispatch message to corresponding channel if it is outbound
+    if (messageRole === "assistant") {
+      const channel = conversation.channel;
+      const contact = conversation.customerContact;
+
+      try {
+        if (channel === "whatsapp") {
+          const { sendWhatsAppMessage } = await import("@/lib/channels/whatsapp");
+          await sendWhatsAppMessage(contact, content.trim());
+        } else if (channel === "sms") {
+          const { sendSms } = await import("@/lib/channels/sms");
+          await sendSms(contact, content.trim());
+        } else if (channel === "email") {
+          const { sendEmail } = await import("@/lib/channels/email");
+          await sendEmail(contact, "Support Update", content.trim());
+        } else if (channel === "telegram") {
+          const { sendTelegram } = await import("@/lib/channels/telegram");
+          await sendTelegram(contact, content.trim());
+        }
+      } catch (dispatchError) {
+        logger.error(`[API] Failed to dispatch outbound message to ${channel}:`, dispatchError);
+      }
+    }
+
     emitNewMessage(id, { id: message.id, role: messageRole, content: content.trim() });
 
     return NextResponse.json(message, { status: 201 });

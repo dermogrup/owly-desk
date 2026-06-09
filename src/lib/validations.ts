@@ -152,6 +152,7 @@ export const updateSettingsSchema = z.object({
   aiProvider: z.string().max(50).optional(),
   aiModel: z.string().max(100).optional(),
   aiApiKey: z.string().max(500).optional(),
+  aiBaseUrl: z.string().max(1000).optional(),
   maxTokens: z.number().int().min(100).max(128000).optional(),
   temperature: z.number().min(0).max(2).optional(),
   smtpHost: z.string().max(500).optional(),

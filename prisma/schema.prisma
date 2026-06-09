@@ -19,6 +19,7 @@ model Settings {
   aiProvider      String   @default("openai")
   aiModel         String   @default("gpt-4o-mini")
   aiApiKey        String   @default("")
+  aiBaseUrl       String   @default("")
   maxTokens       Int      @default(2048)
   temperature     Float    @default(0.7)
   elevenLabsKey   String   @default("")

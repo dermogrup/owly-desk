@@ -15,19 +15,39 @@ export async function GET(request: NextRequest) {
     });
 
     const channelMap = new Map(channels.map((ch) => [ch.type, ch]));
-    const result = CHANNEL_TYPES.map((type) => {
-      const existing = channelMap.get(type);
-      if (existing) return existing;
-      return {
-        id: null,
-        type,
-        isActive: false,
-        config: {},
-        status: "disconnected",
-        createdAt: null,
-        updatedAt: null,
-      };
-    });
+    const result = await Promise.all(
+      CHANNEL_TYPES.map(async (type) => {
+        const existing = channelMap.get(type);
+        if (existing) {
+          if (type === "whatsapp") {
+            const { getWhatsAppStatus } = await import("@/lib/channels/whatsapp");
+            const statusInfo = getWhatsAppStatus();
+            return {
+              ...existing,
+              status: statusInfo.status,
+            };
+          }
+          if (type === "email") {
+            const { getEmailStatus } = await import("@/lib/channels/email");
+            const statusInfo = getEmailStatus();
+            return {
+              ...existing,
+              status: statusInfo.status,
+            };
+          }
+          return existing;
+        }
+        return {
+          id: null,
+          type,
+          isActive: false,
+          config: {},
+          status: "disconnected",
+          createdAt: null,
+          updatedAt: null,
+        };
+      })
+    );
 
     return NextResponse.json(result);
   } catch (error) {

@@ -22,6 +22,7 @@ const PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI", models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"] },
   { value: "claude", label: "Claude (Anthropic)", models: ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"] },
   { value: "ollama", label: "Ollama (Local)", models: ["llama3", "mistral", "codellama", "phi3"] },
+  { value: "custom", label: "Custom Provider (OpenAI Compatible)", models: [] },
 ];
 
 export default function SetupPage() {
@@ -47,6 +48,7 @@ export default function SetupPage() {
   const [aiProvider, setAiProvider] = useState("openai");
   const [aiModel, setAiModel] = useState("gpt-4o-mini");
   const [aiApiKey, setAiApiKey] = useState("");
+  const [aiBaseUrl, setAiBaseUrl] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
 
   // Step 4 - Summary
@@ -135,6 +137,7 @@ export default function SetupPage() {
           aiModel,
         };
         if (aiApiKey.trim()) body.aiApiKey = aiApiKey.trim();
+        if (aiBaseUrl.trim()) body.aiBaseUrl = aiBaseUrl.trim();
 
         const res = await fetch("/api/settings", {
           method: "PUT",
@@ -339,10 +342,14 @@ export default function SetupPage() {
                   onChange={(e) => {
                     const prov = e.target.value;
                     setAiProvider(prov);
-                    const models =
-                      PROVIDER_OPTIONS.find((p) => p.value === prov)?.models ||
-                      [];
-                    setAiModel(models[0] || "");
+                    if (prov === "custom") {
+                      setAiModel("custom-model");
+                    } else {
+                      const models =
+                        PROVIDER_OPTIONS.find((p) => p.value === prov)?.models ||
+                        [];
+                      setAiModel(models[0] || "");
+                    }
                   }}
                   className="w-full rounded-lg border border-owly-border bg-owly-bg px-3.5 py-2.5 text-sm text-owly-text focus:outline-none focus:ring-2 focus:ring-owly-primary focus:border-transparent transition-shadow"
                 >
@@ -354,6 +361,25 @@ export default function SetupPage() {
                 </select>
               </div>
 
+              {aiProvider === "custom" && (
+                <div>
+                  <label
+                    htmlFor="aiBaseUrl"
+                    className="block text-sm font-medium text-owly-text mb-1.5"
+                  >
+                    Base URL
+                  </label>
+                  <input
+                    id="aiBaseUrl"
+                    type="text"
+                    value={aiBaseUrl}
+                    onChange={(e) => setAiBaseUrl(e.target.value)}
+                    placeholder="https://api.yourprovider.com/v1"
+                    className="w-full rounded-lg border border-owly-border bg-owly-bg px-3.5 py-2.5 text-sm text-owly-text placeholder:text-owly-text-light focus:outline-none focus:ring-2 focus:ring-owly-primary focus:border-transparent transition-shadow"
+                  />
+                </div>
+              )}
+
               <div>
                 <label
                   htmlFor="aiModel"
@@ -361,18 +387,29 @@ export default function SetupPage() {
                 >
                   Model
                 </label>
-                <select
-                  id="aiModel"
-                  value={aiModel}
-                  onChange={(e) => setAiModel(e.target.value)}
-                  className="w-full rounded-lg border border-owly-border bg-owly-bg px-3.5 py-2.5 text-sm text-owly-text focus:outline-none focus:ring-2 focus:ring-owly-primary focus:border-transparent transition-shadow"
-                >
-                  {currentModels().map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                {aiProvider === "custom" ? (
+                  <input
+                    id="aiModel"
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    placeholder="e.g. deepseek-chat or custom-model"
+                    className="w-full rounded-lg border border-owly-border bg-owly-bg px-3.5 py-2.5 text-sm text-owly-text placeholder:text-owly-text-light focus:outline-none focus:ring-2 focus:ring-owly-primary focus:border-transparent transition-shadow"
+                  />
+                ) : (
+                  <select
+                    id="aiModel"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    className="w-full rounded-lg border border-owly-border bg-owly-bg px-3.5 py-2.5 text-sm text-owly-text focus:outline-none focus:ring-2 focus:ring-owly-primary focus:border-transparent transition-shadow"
+                  >
+                    {currentModels().map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div>

@@ -35,6 +35,7 @@ export interface AIConfig {
   apiKey: string;
   maxTokens: number;
   temperature: number;
+  aiBaseUrl?: string;
 }
 
 export interface ConversationContext {

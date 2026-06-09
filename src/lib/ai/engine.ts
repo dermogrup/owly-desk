@@ -88,6 +88,7 @@ async function getAIConfig(): Promise<AIConfig & ConversationContext> {
     apiKey: settings.aiApiKey,
     maxTokens: settings.maxTokens,
     temperature: settings.temperature,
+    aiBaseUrl: settings.aiBaseUrl,
     businessName: settings.businessName,
     businessDesc: settings.businessDesc,
     welcomeMessage: settings.welcomeMessage,
@@ -166,12 +167,18 @@ export async function chat(
   }
 
   // Save user message
-  await prisma.message.create({
+  const savedCustomerMsg = await prisma.message.create({
     data: {
       conversationId,
       role: "customer",
       content: userMessage,
     },
+  });
+
+  emitNewMessage(conversationId, {
+    id: savedCustomerMsg.id,
+    role: "customer",
+    content: userMessage,
   });
 
   // Call AI
@@ -216,7 +223,10 @@ async function callAI(
     return "I apologize, but I'm having trouble processing your request. Let me connect you with a team member.";
   }
 
-  const openai = new OpenAI({ apiKey: config.apiKey });
+  const openai = new OpenAI({
+    apiKey: config.apiKey,
+    ...(config.aiBaseUrl ? { baseURL: config.aiBaseUrl } : {}),
+  });
 
   let response;
   try {
@@ -285,7 +295,7 @@ export async function createNewConversation(
   customerContact: string,
   customerId?: string
 ) {
-  return prisma.conversation.create({
+  const conv = await prisma.conversation.create({
     data: {
       channel,
       customerName,
@@ -293,4 +303,13 @@ export async function createNewConversation(
       ...(customerId && { customerId }),
     },
   });
+
+  const { publish } = await import("@/lib/realtime");
+  publish("global", {
+    type: "conversation:new",
+    conversationId: conv.id,
+    data: { id: conv.id, channel, customerName, customerContact },
+  });
+
+  return conv;
 }

@@ -6,7 +6,7 @@ import { logger } from "@/lib/logger";
  * Strips WhatsApp suffixes (@c.us, @s.whatsapp.net) and non-digit chars (except leading +).
  */
 export function normalizePhone(input: string): string {
-  const cleaned = input.replace(/@(c\.us|s\.whatsapp\.net)$/, "");
+  const cleaned = input.replace(/@(c\.us|s\.whatsapp\.net|lid)$/, "");
   return cleaned.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
 }
 

@@ -27,11 +27,13 @@ interface ActivityData {
 }
 
 interface ActivityResponse {
-  activities: ActivityData[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
+  data: ActivityData[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 const entityTypes = [
@@ -108,9 +110,9 @@ export default function ActivityPage() {
     setPage(1);
   }, [entityFilter]);
 
-  const activities = data?.activities || [];
-  const totalPages = data?.totalPages || 1;
-  const total = data?.total || 0;
+  const activities = data?.data || [];
+  const totalPages = data?.pagination?.totalPages || 1;
+  const total = data?.pagination?.total || 0;
 
   return (
     <>

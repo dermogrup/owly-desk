@@ -31,6 +31,7 @@ interface SettingsData {
   aiProvider: string;
   aiModel: string;
   aiApiKey: string;
+  aiBaseUrl: string;
   maxTokens: number;
   temperature: number;
   elevenLabsKey: string;
@@ -82,7 +83,7 @@ const tabs: TabDef[] = [
 // Which fields belong to each section (used for partial saves)
 const sectionFields: Record<SectionKey, (keyof SettingsData)[]> = {
   general: ["businessName", "businessDesc", "welcomeMessage", "tone", "language"],
-  ai: ["aiProvider", "aiModel", "aiApiKey", "maxTokens", "temperature"],
+  ai: ["aiProvider", "aiModel", "aiApiKey", "aiBaseUrl", "maxTokens", "temperature"],
   voice: ["elevenLabsKey", "elevenLabsVoice"],
   phone: ["twilioSid", "twilioToken", "twilioPhone"],
   email: [
@@ -452,24 +453,47 @@ function AISection({
           value={data.aiProvider}
           onChange={(v) => {
             update("aiProvider", v);
-            const models = modelOptions[v];
-            if (models && models.length > 0) {
-              update("aiModel", models[0].value);
+            if (v === "custom") {
+              // Set a placeholder or keep empty
+              update("aiModel", "custom-model");
+            } else {
+              const models = modelOptions[v];
+              if (models && models.length > 0) {
+                update("aiModel", models[0].value);
+              }
             }
           }}
           options={[
             { value: "openai", label: "OpenAI" },
             { value: "claude", label: "Claude (Anthropic)" },
             { value: "ollama", label: "Ollama (Local)" },
+            { value: "custom", label: "Custom Provider (OpenAI Compatible)" },
           ]}
         />
       </FormField>
+      {data.aiProvider === "custom" && (
+        <FormField label="Base URL" description="The API base URL for your custom provider (must be OpenAI compatible).">
+          <TextInput
+            value={data.aiBaseUrl}
+            onChange={(v) => update("aiBaseUrl", v)}
+            placeholder="https://api.yourprovider.com/v1"
+          />
+        </FormField>
+      )}
       <FormField label="Model" description="The specific model to use for AI responses.">
-        <SelectInput
-          value={data.aiModel}
-          onChange={(v) => update("aiModel", v)}
-          options={modelOptions[data.aiProvider] || []}
-        />
+        {data.aiProvider === "custom" ? (
+          <TextInput
+            value={data.aiModel}
+            onChange={(v) => update("aiModel", v)}
+            placeholder="e.g. deepseek-chat or custom-model"
+          />
+        ) : (
+          <SelectInput
+            value={data.aiModel}
+            onChange={(v) => update("aiModel", v)}
+            options={modelOptions[data.aiProvider] || []}
+          />
+        )}
       </FormField>
       <FormField label="API Key" description="Your provider API key. Not required for Ollama.">
         <PasswordInput
@@ -741,6 +765,7 @@ const defaultSettings: SettingsData = {
   aiProvider: "openai",
   aiModel: "gpt-4o-mini",
   aiApiKey: "",
+  aiBaseUrl: "",
   maxTokens: 2048,
   temperature: 0.7,
   elevenLabsKey: "",

@@ -107,7 +107,7 @@ export default function ConversationsPage() {
       const res = await fetch(`/api/conversations?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load conversations");
       const data = await res.json();
-      setConversations(data);
+      setConversations(data.data);
     } catch (error) {
       console.error("Failed to fetch conversations:", error);
       setFetchError("Failed to load conversations. Please try refreshing the page.");
@@ -140,6 +140,45 @@ export default function ConversationsPage() {
       fetchConversationDetail(selectedId);
     }
   }, [selectedId, fetchConversationDetail]);
+
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    const eventSource = new EventSource("/api/realtime?channel=global");
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.type === "message:new") {
+          fetchConversations();
+          if (payload.conversationId === selectedIdRef.current) {
+            fetchConversationDetail(payload.conversationId);
+          }
+        } else if (
+          payload.type === "conversation:updated" ||
+          payload.type === "conversation:new"
+        ) {
+          fetchConversations();
+          if (payload.conversationId === selectedIdRef.current) {
+            fetchConversationDetail(payload.conversationId);
+          }
+        }
+      } catch (err) {
+        console.error("Error parsing realtime event:", err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("SSE connection error:", err);
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [fetchConversations, fetchConversationDetail]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
