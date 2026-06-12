@@ -31,13 +31,19 @@ interface EventPayload {
 
 type EventCallback = (event: EventPayload) => void;
 
-// In-memory subscriber registry
-const subscribers = new Map<string, Set<EventCallback>>();
+const globalForRealtime = globalThis as typeof globalThis & {
+  __owlyRealtimeSubscribers?: Map<string, Set<EventCallback>>;
+};
 
-/**
- * Subscribe to real-time events.
- * Returns an unsubscribe function.
- */
+// Next.js dev mode / hot reload sırasında modül yeniden yüklenebilir.
+// Subscriber map globalThis üzerinde tutulmazsa publish ile subscribe farklı map'lere düşebilir.
+const subscribers =
+  globalForRealtime.__owlyRealtimeSubscribers ??
+  (globalForRealtime.__owlyRealtimeSubscribers = new Map<
+    string,
+    Set<EventCallback>
+  >());
+
 export function subscribe(
   channel: string,
   callback: EventCallback
@@ -45,74 +51,124 @@ export function subscribe(
   if (!subscribers.has(channel)) {
     subscribers.set(channel, new Set());
   }
+
   subscribers.get(channel)!.add(callback);
+
+  logger.info(
+    `[Realtime] subscriber added channel=${channel} total=${getSubscriberCount()}`
+  );
 
   return () => {
     const subs = subscribers.get(channel);
+
     if (subs) {
       subs.delete(callback);
-      if (subs.size === 0) subscribers.delete(channel);
+
+      if (subs.size === 0) {
+        subscribers.delete(channel);
+      }
     }
+
+    logger.info(
+      `[Realtime] subscriber removed channel=${channel} total=${getSubscriberCount()}`
+    );
   };
 }
 
-/**
- * Publish an event to all subscribers on a channel.
- */
-export function publish(channel: string, event: Omit<EventPayload, "timestamp">): void {
+function publishToChannel(channel: string, payload: EventPayload): void {
+  const subs = subscribers.get(channel);
+
+  if (!subs || subs.size === 0) {
+    logger.info(`[Realtime] no subscribers for channel=${channel}`);
+    return;
+  }
+
+  for (const callback of subs) {
+    try {
+      callback(payload);
+    } catch (error) {
+      logger.error(`[Realtime] subscriber callback error channel=${channel}`, error);
+    }
+  }
+}
+
+export function publish(
+  channel: string,
+  event: Omit<EventPayload, "timestamp">
+): void {
   const payload: EventPayload = {
     ...event,
     timestamp: new Date().toISOString(),
   };
 
-  const subs = subscribers.get(channel);
-  if (subs) {
-    for (const callback of subs) {
-      try {
-        callback(payload);
-      } catch (error) {
-        logger.error("SSE subscriber callback error", error);
-      }
-    }
-  }
+  logger.info(
+    `[Realtime] publish type=${payload.type} channel=${channel} conversationId=${
+      payload.conversationId || ""
+    }`
+  );
 
-  // Also publish to global channel
+  publishToChannel(channel, payload);
+
   if (channel !== "global") {
-    const globalSubs = subscribers.get("global");
-    if (globalSubs) {
-      for (const callback of globalSubs) {
-        try {
-          callback(payload);
-        } catch (error) {
-          logger.error("SSE global subscriber callback error", error);
-        }
-      }
-    }
+    publishToChannel("global", payload);
   }
 }
 
-/**
- * Helper: Emit a new message event.
- */
 export function emitNewMessage(
   conversationId: string,
-  message: { id: string; role: string; content: string }
+  message: {
+    id: string;
+    role: string;
+    content: string;
+    createdAt?: string | Date;
+    mediaType?: string | null;
+    mediaUrl?: string | null;
+  }
 ): void {
+  const createdAt =
+    message.createdAt instanceof Date
+      ? message.createdAt.toISOString()
+      : message.createdAt || new Date().toISOString();
+
+  const messageWithMeta = {
+    id: message.id,
+    conversationId,
+    role: message.role,
+    content: message.content,
+    mediaType: message.mediaType ?? null,
+    mediaUrl: message.mediaUrl ?? null,
+    createdAt,
+  };
+
   publish(`conversation:${conversationId}`, {
     type: "message:new",
     conversationId,
-    data: message,
+    data: {
+      message: messageWithMeta,
+      ...messageWithMeta,
+    },
   });
+
   publish("global", {
     type: "message:new",
     conversationId,
-    data: { conversationId, messageId: message.id, role: message.role },
+    data: {
+      conversationId,
+      messageId: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt,
+      message: messageWithMeta,
+    },
+  });
+
+  emitConversationUpdate(conversationId, {
+    lastMessage: message.content,
+    lastMessageRole: message.role,
+    updatedAt: createdAt,
   });
 }
 
-/**
- * Helper: Emit typing indicator.
- */
 export function emitTyping(
   conversationId: string,
   userName: string,
@@ -121,13 +177,10 @@ export function emitTyping(
   publish(`conversation:${conversationId}`, {
     type: isTyping ? "typing:start" : "typing:stop",
     conversationId,
-    data: { userName },
+    data: { userName, isTyping },
   });
 }
 
-/**
- * Helper: Emit conversation update.
- */
 export function emitConversationUpdate(
   conversationId: string,
   changes: Record<string, unknown>
@@ -135,17 +188,19 @@ export function emitConversationUpdate(
   publish("global", {
     type: "conversation:updated",
     conversationId,
-    data: changes,
+    data: {
+      conversationId,
+      ...changes,
+    },
   });
 }
 
-/**
- * Get subscriber count for monitoring.
- */
 export function getSubscriberCount(): number {
   let count = 0;
+
   for (const subs of subscribers.values()) {
     count += subs.size;
   }
+
   return count;
 }

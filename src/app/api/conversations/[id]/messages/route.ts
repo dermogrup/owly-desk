@@ -4,6 +4,9 @@ import { logger } from "@/lib/logger";
 import { requireAuth, isAuthenticated } from "@/lib/route-auth";
 import { emitNewMessage } from "@/lib/realtime";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -52,7 +55,9 @@ export async function POST(
     const body = await request.json();
     const { content, role } = body;
 
-    if (!content || typeof content !== "string" || content.trim().length === 0) {
+    const trimmedContent = typeof content === "string" ? content.trim() : "";
+
+    if (!trimmedContent) {
       return NextResponse.json(
         { error: "Message content is required" },
         { status: 400 }
@@ -70,14 +75,14 @@ export async function POST(
       );
     }
 
-    const validRoles = ["customer", "assistant", "system"];
-    const messageRole = validRoles.includes(role) ? role : "assistant";
+    const validRoles = ["customer", "assistant", "admin", "system"];
+    const messageRole = validRoles.includes(role) ? role : "admin";
 
     const message = await prisma.message.create({
       data: {
         conversationId: id,
         role: messageRole,
-        content: content.trim(),
+        content: trimmedContent,
       },
     });
 
@@ -86,31 +91,46 @@ export async function POST(
       data: { updatedAt: new Date() },
     });
 
-    // Dispatch message to corresponding channel if it is outbound
-    if (messageRole === "assistant") {
+    // Dispatch message to corresponding channel if it is outbound.
+    // Conversations UI sends role="admin", AI sends role="assistant".
+    if (messageRole === "assistant" || messageRole === "admin") {
       const channel = conversation.channel;
       const contact = conversation.customerContact;
 
       try {
         if (channel === "whatsapp") {
           const { sendWhatsAppMessage } = await import("@/lib/channels/whatsapp");
-          await sendWhatsAppMessage(contact, content.trim());
+
+          logger.info(`[API] Sending WhatsApp message to ${contact}`);
+
+          const sent = await sendWhatsAppMessage(contact, trimmedContent);
+
+          if (!sent) {
+            logger.error(`[API] WhatsApp message failed to send to ${contact}`);
+          }
         } else if (channel === "sms") {
           const { sendSms } = await import("@/lib/channels/sms");
-          await sendSms(contact, content.trim());
+          await sendSms(contact, trimmedContent);
         } else if (channel === "email") {
           const { sendEmail } = await import("@/lib/channels/email");
-          await sendEmail(contact, "Support Update", content.trim());
+          await sendEmail(contact, "Support Update", trimmedContent);
         } else if (channel === "telegram") {
           const { sendTelegram } = await import("@/lib/channels/telegram");
-          await sendTelegram(contact, content.trim());
+          await sendTelegram(contact, trimmedContent);
         }
       } catch (dispatchError) {
-        logger.error(`[API] Failed to dispatch outbound message to ${channel}:`, dispatchError);
+        logger.error(
+          `[API] Failed to dispatch outbound message to ${channel}:`,
+          dispatchError
+        );
       }
     }
 
-    emitNewMessage(id, { id: message.id, role: messageRole, content: content.trim() });
+    emitNewMessage(id, {
+      id: message.id,
+      role: messageRole,
+      content: trimmedContent,
+    });
 
     return NextResponse.json(message, { status: 201 });
   } catch (error) {

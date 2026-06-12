@@ -63,7 +63,15 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status, customerName, customerContact, summary, satisfaction, tagIds } = body;
+    const {
+  status,
+  customerName,
+  customerContact,
+  summary,
+  satisfaction,
+  tagIds,
+  aiEnabled,
+} = body;
 
     const validStatuses = ["active", "resolved", "closed", "escalated", "snoozed"];
     if (status !== undefined && !validStatuses.includes(status)) {
@@ -98,6 +106,10 @@ export async function PUT(
         ...(customerContact !== undefined && { customerContact: customerContact.trim() }),
         ...(summary !== undefined && { summary: summary.trim() }),
         ...(satisfaction !== undefined && { satisfaction }),
+		...(typeof aiEnabled === "boolean" && {
+  aiEnabled,
+  aiEnabledAt: aiEnabled ? new Date() : null,
+}),
       },
       include: {
         messages: {
@@ -138,7 +150,14 @@ export async function PUT(
       return NextResponse.json(updated);
     }
 
-    emitConversationUpdate(id, { status, customerName });
+    emitConversationUpdate(id, {
+  status,
+  customerName,
+  ...(typeof aiEnabled === "boolean" && {
+    aiEnabled,
+    aiEnabledAt: conversation.aiEnabledAt,
+  }),
+});
 
     return NextResponse.json(conversation);
   } catch (error) {

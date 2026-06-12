@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Search, Sun, Moon, LogOut, User } from "lucide-react";
+import { Bell, Search, Sun, Moon, LogOut, User, X } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { useRouter } from "next/navigation";
@@ -11,19 +11,124 @@ interface HeaderProps {
   actions?: React.ReactNode;
 }
 
+type NotificationItem = {
+  id: string;
+  conversationId: string;
+  content: string;
+  createdAt: string;
+};
+
+const NOTIFICATIONS_STORAGE_KEY = "owly.notifications";
+
+function getNotificationMessage(payload: any): NotificationItem | null {
+  if (!payload || payload.type !== "message:new") return null;
+
+  const data = payload.data || {};
+  const message = data.message || data;
+  const role = message.role || data.role;
+
+  // Only customer/incoming messages should create notifications.
+  // Admin and assistant messages are ignored.
+  if (role !== "customer") return null;
+
+  const conversationId = payload.conversationId || data.conversationId;
+  const id = message.id || data.messageId;
+  const content = message.content || data.content || "New message";
+  const createdAt = message.createdAt || data.createdAt || payload.timestamp || new Date().toISOString();
+
+  if (!conversationId || !id) return null;
+
+  return {
+    id,
+    conversationId,
+    content,
+    createdAt,
+  };
+}
+
 export function Header({ title, description, actions }: HeaderProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const menuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setNotifications(parsed.slice(0, 25));
+        }
+      }
+    } catch {
+      // Ignore malformed localStorage data.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        NOTIFICATIONS_STORAGE_KEY,
+        JSON.stringify(notifications.slice(0, 25))
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [notifications]);
+
+  useEffect(() => {
+    const eventSource = new EventSource("/api/realtime?channel=global");
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        const notification = getNotificationMessage(payload);
+
+        if (!notification) return;
+
+        setNotifications((prev) => {
+          if (prev.some((item) => item.id === notification.id)) {
+            return prev;
+          }
+
+          return [notification, ...prev].slice(0, 25);
+        });
+      } catch (error) {
+        console.error("Failed to parse notification event:", error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error("Notification SSE connection error:", error);
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+
+      if (menuRef.current && !menuRef.current.contains(target)) {
         setUserMenuOpen(false);
       }
+
+      if (
+        notificationsRef.current &&
+        !notificationsRef.current.contains(target)
+      ) {
+        setNotificationsOpen(false);
+      }
     }
+
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
@@ -35,6 +140,19 @@ export function Header({ title, description, actions }: HeaderProps) {
       body: JSON.stringify({ action: "logout" }),
     });
     router.push("/login");
+  };
+
+  const openNotification = (notification: NotificationItem) => {
+    setNotifications((prev) =>
+      prev.filter((item) => item.id !== notification.id)
+    );
+    setNotificationsOpen(false);
+    router.push(`/conversations?conversationId=${notification.conversationId}`);
+  };
+
+  const clearNotifications = () => {
+    setNotifications([]);
+    setNotificationsOpen(false);
   };
 
   return (
@@ -56,6 +174,7 @@ export function Header({ title, description, actions }: HeaderProps) {
             onBlur={() => setSearchOpen(false)}
           />
         )}
+
         <button
           onClick={() => setSearchOpen(!searchOpen)}
           className="p-2 text-owly-text-light hover:text-owly-text hover:bg-owly-primary-50 rounded-lg transition-colors"
@@ -76,10 +195,90 @@ export function Header({ title, description, actions }: HeaderProps) {
           )}
         </button>
 
-        <button className="relative p-2 text-owly-text-light hover:text-owly-text hover:bg-owly-primary-50 rounded-lg transition-colors">
-          <Bell className="h-5 w-5" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-owly-danger rounded-full" />
-        </button>
+        <div className="relative" ref={notificationsRef}>
+          <button
+            onClick={() => setNotificationsOpen((value) => !value)}
+            className="relative p-2 text-owly-text-light hover:text-owly-text hover:bg-owly-primary-50 rounded-lg transition-colors"
+            title="Notifications"
+          >
+            <Bell className="h-5 w-5" />
+            {notifications.length > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-owly-danger rounded-full" />
+            )}
+          </button>
+
+          {notificationsOpen && (
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 max-h-96 overflow-hidden bg-owly-surface border border-owly-border rounded-lg shadow-lg z-50 animate-scale-in transition-theme">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-owly-border">
+                <div>
+                  <p className="text-sm font-semibold text-owly-text">
+                    Notifications
+                  </p>
+                  <p className="text-xs text-owly-text-light">
+                    {notifications.length > 0
+                      ? `${notifications.length} unread message${
+                          notifications.length > 1 ? "s" : ""
+                        }`
+                      : "No unread notifications"}
+                  </p>
+                </div>
+
+                {notifications.length > 0 && (
+                  <button
+                    onClick={clearNotifications}
+                    className="text-xs font-medium text-owly-primary hover:text-owly-primary-dark"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+
+              {notifications.length === 0 ? (
+                <div className="p-6 text-center">
+                  <Bell className="h-8 w-8 mx-auto text-owly-text-light opacity-40 mb-2" />
+                  <p className="text-sm text-owly-text-light">
+                    No notifications yet
+                  </p>
+                </div>
+              ) : (
+                <div className="max-h-80 overflow-y-auto divide-y divide-owly-border">
+                  {notifications.map((notification) => (
+                    <button
+                      key={notification.id}
+                      onClick={() => openNotification(notification)}
+                      className="w-full text-left px-4 py-3 hover:bg-owly-primary-50/60 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-owly-text">
+                            New WhatsApp message
+                          </p>
+                          <p className="text-xs text-owly-text-light mt-1 truncate">
+                            {notification.content}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setNotifications((prev) =>
+                              prev.filter((item) => item.id !== notification.id)
+                            );
+                          }}
+                          className="p-1 text-owly-text-light hover:text-owly-text rounded"
+                          title="Dismiss"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {actions}
 

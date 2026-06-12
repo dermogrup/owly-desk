@@ -103,7 +103,10 @@ async function getAIConfig(): Promise<AIConfig & ConversationContext> {
 
 export async function chat(
   conversationId: string,
-  userMessage: string
+  userMessage: string,
+  options?: {
+    saveUserMessage?: boolean;
+  }
 ): Promise<string> {
   const config = await getAIConfig();
 
@@ -111,12 +114,40 @@ export async function chat(
     return "AI is not configured. Please add your API key in Settings > AI Configuration.";
   }
 
-  const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    include: {
-      messages: { orderBy: { createdAt: "asc" }, take: 50 },
+const conversationBase = await prisma.conversation.findUnique({
+  where: { id: conversationId },
+  select: {
+    id: true,
+    channel: true,
+    customerName: true,
+    aiEnabledAt: true,
+  },
+});
+
+if (!conversationBase) {
+  return "Conversation not found.";
+}
+
+const conversation = await prisma.conversation.findUnique({
+  where: { id: conversationId },
+  include: {
+    messages: {
+      where: conversationBase.aiEnabledAt
+        ? {
+            createdAt: {
+              gte: conversationBase.aiEnabledAt,
+            },
+          }
+        : undefined,
+      orderBy: { createdAt: "asc" },
+      take: 50,
     },
-  });
+  },
+});
+
+if (!conversation) {
+  return "Conversation not found.";
+}
 
   if (!conversation) {
     return "Conversation not found.";
@@ -166,7 +197,7 @@ export async function chat(
     });
   }
 
-  // Save user message
+if (options?.saveUserMessage !== false) {
   const savedCustomerMsg = await prisma.message.create({
     data: {
       conversationId,
@@ -179,7 +210,9 @@ export async function chat(
     id: savedCustomerMsg.id,
     role: "customer",
     content: userMessage,
+    createdAt: savedCustomerMsg.createdAt.toISOString(),
   });
+}
 
   // Call AI
   const response = await callAI(config, messages, conversationId);

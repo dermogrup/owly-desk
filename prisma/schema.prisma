@@ -126,6 +126,8 @@ model Conversation {
   customerId      String?
   customer        Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
   status          String            @default("active")
+  aiEnabled       Boolean           @default(true)
+  aiEnabledAt     DateTime?
   satisfaction    Int?
   summary         String            @default("")
   metadata        Json              @default("{}")

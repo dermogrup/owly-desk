@@ -4,197 +4,424 @@ import { prisma } from "@/lib/prisma";
 import { chat, createNewConversation } from "@/lib/ai/engine";
 import { logger } from "@/lib/logger";
 import { resolveCustomer } from "@/lib/customer-resolver";
+import { emitNewMessage, emitConversationUpdate } from "@/lib/realtime";
 import * as fs from "fs";
 import * as path from "path";
 
-let whatsappClient: Client | null = null;
-let currentQR: string | null = null;
-let connectionStatus: "disconnected" | "qr_ready" | "connecting" | "connected" | "error" = "disconnected";
-let statusMessage = "";
+type WhatsAppConnectionStatus =
+  | "disconnected"
+  | "qr_ready"
+  | "connecting"
+  | "connected"
+  | "error";
+
+type WhatsAppGlobalState = {
+  client: Client | null;
+  qr: string | null;
+  status: WhatsAppConnectionStatus;
+  message: string;
+  initializing: boolean;
+};
+
+const globalForWhatsApp = globalThis as typeof globalThis & {
+  __owlyWhatsAppState?: WhatsAppGlobalState;
+};
+
+const state =
+  globalForWhatsApp.__owlyWhatsAppState ??
+  (globalForWhatsApp.__owlyWhatsAppState = {
+    client: null,
+    qr: null,
+    status: "disconnected",
+    message: "",
+    initializing: false,
+  });
+
+function getStatePath() {
+  return path.join(process.cwd(), ".whatsapp-state.json");
+}
+
+function cleanupChromiumLocks() {
+  const sessionPath = path.join(process.cwd(), ".wwebjs_auth", "session");
+
+  const lockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+
+  for (const file of lockFiles) {
+    const filePath = path.join(sessionPath, file);
+
+    try {
+      if (fs.existsSync(filePath)) {
+        logger.info(`[WhatsApp] Removing Chromium lock: ${filePath}`);
+        fs.rmSync(filePath, { force: true, recursive: true });
+      }
+    } catch (err) {
+      logger.error(`[WhatsApp] Failed to remove Chromium lock ${file}:`, err);
+    }
+  }
+}
+
+async function destroyClientSafely() {
+  if (!state.client) return;
+
+  try {
+    logger.info("[WhatsApp] Destroying stale client...");
+    await state.client.destroy();
+  } catch (err) {
+    logger.error("[WhatsApp] Error while destroying stale client:", err);
+  }
+
+  state.client = null;
+}
+
+async function getRealClientState(client: Client | null): Promise<string | null> {
+  if (!client) return null;
+
+  try {
+    return await client.getState();
+  } catch {
+    return null;
+  }
+}
 
 export function getWhatsAppStatus() {
+  const statePath = getStatePath();
+
+  if (fs.existsSync(statePath)) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+
+      if (saved.qr) {
+        return {
+          status: saved.status || "qr_ready",
+          qr: saved.qr,
+          message:
+            saved.message || "Scan the QR code with WhatsApp on your phone",
+        };
+      }
+    } catch (err) {
+      logger.error("[WhatsApp] Failed to read saved QR state:", err);
+    }
+  }
+
   return {
-    status: connectionStatus,
-    qr: currentQR,
-    message: statusMessage,
+    status: state.status,
+    qr: state.qr,
+    message: state.message,
   };
 }
 
 export async function initWhatsApp(): Promise<void> {
-  if (whatsappClient) {
-    logger.info("[WhatsApp] Client already exists");
+  if (state.initializing) {
+    logger.info("[WhatsApp] Initialize already running");
     return;
   }
 
-  // Pre-cleanup of legacy Chromium lockfiles that cause profile-in-use crash inside Docker
-  const lockPath = path.join(process.cwd(), ".wwebjs_auth", "session", "SingletonLock");
+  state.initializing = true;
+
   try {
-    // fs.existsSync/statSync follows symlinks and will return false for stale symlinks,
-    // but fs.lstatSync returns info for the symlink itself, allowing us to safely detect and delete it!
-    fs.lstatSync(lockPath);
-    logger.info(`[WhatsApp] Removing legacy Chromium lockfile/symlink at ${lockPath}`);
-    fs.unlinkSync(lockPath);
-  } catch (err: any) {
-    if (err.code !== "ENOENT") {
-      logger.error("[WhatsApp] Failed to remove Chromium lockfile:", err);
-    }
-  }
+    if (state.client) {
+      const realState = await getRealClientState(state.client);
 
-  connectionStatus = "connecting";
-  statusMessage = "Initializing WhatsApp client...";
+      logger.info(`[WhatsApp] Existing client real state=${realState}`);
 
-  const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: ".wwebjs_auth" }),
-    puppeteer: {
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    },
-  });
-
-  client.on("qr", async (qr: string) => {
-    logger.info("[WhatsApp] QR code received");
-    currentQR = await qrcode.toDataURL(qr);
-    connectionStatus = "qr_ready";
-    statusMessage = "Scan the QR code with WhatsApp on your phone";
-  });
-
-  client.on("ready", async () => {
-    logger.info("[WhatsApp] Client is ready");
-    currentQR = null;
-    connectionStatus = "connected";
-    statusMessage = "Connected to WhatsApp";
-
-    await prisma.channel.upsert({
-      where: { type: "whatsapp" },
-      update: { isActive: true, status: "connected" },
-      create: { type: "whatsapp", isActive: true, status: "connected" },
-    });
-  });
-
-  client.on("authenticated", () => {
-    logger.info("[WhatsApp] Authenticated");
-    connectionStatus = "connecting";
-    statusMessage = "Authenticated, loading chats...";
-  });
-
-  client.on("auth_failure", (message: string) => {
-    logger.error(`[WhatsApp] Auth failure: ${message}`);
-    connectionStatus = "error";
-    statusMessage = `Authentication failed: ${message}`;
-  });
-
-  client.on("disconnected", async (reason: string) => {
-    logger.info(`[WhatsApp] Disconnected: ${reason}`);
-    connectionStatus = "disconnected";
-    statusMessage = `Disconnected: ${reason}`;
-    whatsappClient = null;
-
-    await prisma.channel.upsert({
-      where: { type: "whatsapp" },
-      update: { isActive: false, status: "disconnected" },
-      create: { type: "whatsapp", isActive: false, status: "disconnected" },
-    });
-  });
-
-  client.on("message", async (message: Message) => {
-    logger.info(`[WhatsApp] Raw message event from=${message.from} body=${message.body ? message.body.substring(0, 50) : ""} hasMedia=${message.hasMedia}`);
-    try {
-      if (message.fromMe) {
-        logger.info(`[WhatsApp] Ignoring message because fromMe=true`);
+      if (realState === "CONNECTED") {
+        state.status = "connected";
+        state.message = "Connected to WhatsApp";
+        state.initializing = false;
         return;
       }
 
-      const contact = await message.getContact();
-      const customerName = contact.pushname || contact.name || "Unknown";
-      const customerContact = message.from;
-      logger.info(`[WhatsApp] Processing incoming message from customerName=${customerName} contact=${customerContact}`);
+      await destroyClientSafely();
+    }
 
-      // Resolve customer identity across channels
-      const customerId = await resolveCustomer("whatsapp", customerContact, customerName);
+    cleanupChromiumLocks();
 
-      // Find or create conversation
-      let conversation = await prisma.conversation.findFirst({
-        where: {
-          channel: "whatsapp",
-          status: { in: ["active", "escalated"] },
-          OR: [
-            { customerId },
-            { customerContact },
-          ],
-        },
-      });
+    state.status = "connecting";
+    state.message = "Initializing WhatsApp client...";
 
-      if (!conversation) {
-        conversation = await createNewConversation(
-          "whatsapp",
-          customerName,
-          customerContact,
-          customerId
-        );
+    logger.info("[WhatsApp] Creating new WhatsApp client...");
+
+    const client = new Client({
+      authStrategy: new LocalAuth({
+        dataPath: ".wwebjs_auth",
+      }),
+      puppeteer: {
+        headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-extensions",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+        ],
+      },
+    });
+
+    state.client = client;
+
+    client.on("qr", async (qr: string) => {
+      logger.info("[WhatsApp] QR code received");
+
+      const qrDataUrl = await qrcode.toDataURL(qr);
+
+      state.qr = qrDataUrl;
+      state.status = "qr_ready";
+      state.message = "Scan the QR code with WhatsApp on your phone";
+
+      fs.writeFileSync(
+        getStatePath(),
+        JSON.stringify(
+          {
+            status: "qr_ready",
+            qr: qrDataUrl,
+            message: state.message,
+            updatedAt: new Date().toISOString(),
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+    });
+
+    client.on("ready", async () => {
+      logger.info("[WhatsApp] Client is ready");
+
+      state.client = client;
+      state.qr = null;
+      state.status = "connected";
+      state.message = "Connected to WhatsApp";
+
+      const statePath = getStatePath();
+      if (fs.existsSync(statePath)) {
+        fs.unlinkSync(statePath);
       }
 
-      let messageContent = message.body;
+      await prisma.channel.upsert({
+        where: { type: "whatsapp" },
+        update: { isActive: true, status: "connected" },
+        create: { type: "whatsapp", isActive: true, status: "connected" },
+      });
+    });
 
-      // Handle media messages
-      if (message.hasMedia) {
-        const media = await message.downloadMedia();
-        if (media) {
-          const mediaType = media.mimetype.split("/")[0];
-          messageContent = `[${mediaType} attachment: ${media.filename || "media"}] ${message.body || ""}`;
+    client.on("authenticated", () => {
+      logger.info("[WhatsApp] Authenticated");
 
-          if (mediaType === "audio") {
-            messageContent = `[Voice message received] ${message.body || ""}`;
+      state.client = client;
+      state.status = "connecting";
+      state.message = "Authenticated, loading chats...";
+    });
+
+    client.on("auth_failure", async (message: string) => {
+      logger.error(`[WhatsApp] Auth failure: ${message}`);
+
+      state.status = "error";
+      state.message = `Authentication failed: ${message}`;
+
+      await destroyClientSafely();
+
+      await prisma.channel.upsert({
+        where: { type: "whatsapp" },
+        update: { isActive: false, status: "error" },
+        create: { type: "whatsapp", isActive: false, status: "error" },
+      });
+    });
+
+    client.on("disconnected", async (reason: string) => {
+      logger.info(`[WhatsApp] Disconnected: ${reason}`);
+
+      await destroyClientSafely();
+
+      state.qr = null;
+      state.status = "disconnected";
+      state.message = `Disconnected: ${reason}`;
+
+      await prisma.channel.upsert({
+        where: { type: "whatsapp" },
+        update: { isActive: false, status: "disconnected" },
+        create: { type: "whatsapp", isActive: false, status: "disconnected" },
+      });
+    });
+
+    client.on("message", async (message: Message) => {
+      logger.info(
+        `[WhatsApp] Raw message event from=${message.from} body=${
+          message.body ? message.body.substring(0, 50) : ""
+        } hasMedia=${message.hasMedia}`
+      );
+
+      try {
+        if (message.fromMe) {
+          logger.info("[WhatsApp] Ignoring message because fromMe=true");
+          return;
+        }
+
+        const contact = await message.getContact();
+        const customerName = contact.pushname || contact.name || "Unknown";
+        const customerContact = message.from;
+
+        logger.info(
+          `[WhatsApp] Processing incoming message from customerName=${customerName} contact=${customerContact}`
+        );
+
+        const customerId = await resolveCustomer(
+          "whatsapp",
+          customerContact,
+          customerName
+        );
+
+let conversation = await prisma.conversation.findFirst({
+  where: {
+    channel: "whatsapp",
+    customerContact,
+    status: { in: ["active", "escalated"] },
+  },
+  orderBy: {
+    updatedAt: "desc",
+  },
+});
+
+if (!conversation && customerId) {
+  conversation = await prisma.conversation.findFirst({
+    where: {
+      channel: "whatsapp",
+      customerId,
+      status: { in: ["active", "escalated"] },
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+  });
+}
+
+        if (!conversation) {
+          conversation = await createNewConversation(
+            "whatsapp",
+            customerName,
+            customerContact,
+            customerId
+          );
+        }
+
+        let messageContent = message.body;
+
+        if (message.hasMedia) {
+          const media = await message.downloadMedia();
+
+          if (media) {
+            const mediaType = media.mimetype.split("/")[0];
+
+            messageContent = `[${mediaType} attachment: ${
+              media.filename || "media"
+            }] ${message.body || ""}`;
+
+            if (mediaType === "audio") {
+              messageContent = `[Voice message received] ${
+                message.body || ""
+              }`;
+            }
           }
         }
+
+
+        const savedCustomerMsg = await prisma.message.create({
+  data: {
+    conversationId: conversation.id,
+    role: "customer",
+    content: messageContent,
+  },
+});
+
+logger.info(
+  `[WhatsApp] Saved incoming message id=${savedCustomerMsg.id} conversation=${conversation.id} aiEnabledCheckWillRun=true`
+);
+
+await prisma.conversation.update({
+  where: { id: conversation.id },
+  data: { updatedAt: new Date() },
+});
+
+emitNewMessage(conversation.id, {
+  id: savedCustomerMsg.id,
+  role: "customer",
+  content: messageContent,
+  createdAt: savedCustomerMsg.createdAt.toISOString(),
+});
+
+emitConversationUpdate(conversation.id, {
+  lastMessage: messageContent,
+  updatedAt: savedCustomerMsg.createdAt.toISOString(),
+});
+
+const fullConversation = await prisma.conversation.findUnique({
+  where: { id: conversation.id },
+  select: {
+    aiEnabled: true,
+  },
+});
+
+if (fullConversation?.aiEnabled === false) {
+  logger.info(
+    `[WhatsApp] AI disabled for conversation=${conversation.id}; message saved, no AI reply`
+  );
+  return;
+}
+
+const aiResponse = await chat(conversation.id, messageContent, {
+  saveUserMessage: false,
+});
+
+await message.reply(aiResponse);
+
+      } catch (error) {
+        logger.error("[WhatsApp] Failed to process message:", error);
       }
+    });
 
-      // Get AI response
-      const aiResponse = await chat(conversation.id, messageContent);
-
-      // Send response back via WhatsApp
-      await message.reply(aiResponse);
-    } catch (error) {
-      logger.error("[WhatsApp] Failed to process message:", error);
-    }
-  });
-
-  whatsappClient = client;
-  try {
     await client.initialize();
   } catch (error) {
     logger.error("[WhatsApp] Failed to initialize client:", error);
-    whatsappClient = null;
-    connectionStatus = "error";
-    statusMessage = error instanceof Error ? error.message : "Failed to initialize client";
-    throw error;
+
+    await destroyClientSafely();
+
+    state.status = "error";
+    state.message =
+      error instanceof Error ? error.message : "Failed to initialize client";
+
+    await prisma.channel.upsert({
+      where: { type: "whatsapp" },
+      update: { isActive: false, status: "error" },
+      create: { type: "whatsapp", isActive: false, status: "error" },
+    });
+  } finally {
+    state.initializing = false;
   }
 }
 
 export async function disconnectWhatsApp(): Promise<void> {
   logger.info("[WhatsApp] Disconnecting...");
-  if (whatsappClient) {
+
+  if (state.client) {
     try {
       logger.info("[WhatsApp] Attempting graceful logout...");
-      await whatsappClient.logout();
+      await state.client.logout();
       logger.info("[WhatsApp] Logged out successfully");
     } catch (logoutError) {
-      logger.error("[WhatsApp] Error during client.logout(), destroying client...", logoutError);
-      try {
-        await whatsappClient.destroy();
-      } catch (destroyError) {
-        logger.error("[WhatsApp] Error during client.destroy():", destroyError);
-      }
+      logger.error(
+        "[WhatsApp] Error during client.logout(), destroying client...",
+        logoutError
+      );
+
+      await destroyClientSafely();
     }
   }
 
-  // Force clean up the session directory to guarantee a new QR code on next connect
   const sessionPath = path.join(process.cwd(), ".wwebjs_auth", "session");
+
   if (fs.existsSync(sessionPath)) {
     try {
       logger.info(`[WhatsApp] Deleting session folder at ${sessionPath}`);
@@ -204,10 +431,15 @@ export async function disconnectWhatsApp(): Promise<void> {
     }
   }
 
-  whatsappClient = null;
-  currentQR = null;
-  connectionStatus = "disconnected";
-  statusMessage = "Disconnected";
+  const statePath = getStatePath();
+  if (fs.existsSync(statePath)) {
+    fs.unlinkSync(statePath);
+  }
+
+  state.client = null;
+  state.qr = null;
+  state.status = "disconnected";
+  state.message = "Disconnected";
 
   try {
     await prisma.channel.upsert({
@@ -215,6 +447,7 @@ export async function disconnectWhatsApp(): Promise<void> {
       update: { isActive: false, status: "disconnected" },
       create: { type: "whatsapp", isActive: false, status: "disconnected" },
     });
+
     logger.info("[WhatsApp] Disconnected successfully, state updated in DB");
   } catch (dbError) {
     logger.error("[WhatsApp] Error updating channel status in DB:", dbError);
@@ -225,20 +458,55 @@ export async function sendWhatsAppMessage(
   to: string,
   message: string
 ): Promise<boolean> {
-  logger.info(`[WhatsApp] sendWhatsAppMessage called to=${to} messageLen=${message.length}`);
-  if (!whatsappClient) {
-    logger.error(`[WhatsApp] sendWhatsAppMessage failed: client is null`);
-    return false;
+  logger.info(
+    `[WhatsApp] sendWhatsAppMessage called to=${to} messageLen=${message.length}`
+  );
+
+  logger.info(
+    `[WhatsApp] DEBUG client=${!!state.client} status=${state.status}`
+  );
+
+  if (!state.client) {
+    logger.error("[WhatsApp] sendWhatsAppMessage failed: client is null");
+
+    await initWhatsApp();
+
+    if (!state.client) {
+      return false;
+    }
   }
-  if (connectionStatus !== "connected") {
-    logger.error(`[WhatsApp] sendWhatsAppMessage failed: connectionStatus=${connectionStatus} (not connected)`);
-    return false;
+
+  const realState = await getRealClientState(state.client);
+
+  logger.info(`[WhatsApp] Real client state=${realState}`);
+
+  if (realState !== "CONNECTED") {
+    logger.error(
+      `[WhatsApp] sendWhatsAppMessage failed: realState=${realState}`
+    );
+
+    state.status = "connecting";
+    state.message = "WhatsApp client is reconnecting...";
+
+    await initWhatsApp();
+
+    const retryState = await getRealClientState(state.client);
+
+    if (retryState !== "CONNECTED") {
+      logger.error(
+        `[WhatsApp] sendWhatsAppMessage retry failed: realState=${retryState}`
+      );
+      return false;
+    }
   }
 
   try {
     const chatId = to.includes("@") ? to : `${to}@c.us`;
+
     logger.info(`[WhatsApp] Sending message to JID=${chatId}`);
-    await whatsappClient.sendMessage(chatId, message);
+
+    await state.client!.sendMessage(chatId, message);
+
     logger.info(`[WhatsApp] Message successfully sent to JID=${chatId}`);
     return true;
   } catch (error) {
