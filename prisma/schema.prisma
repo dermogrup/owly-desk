@@ -451,3 +451,22 @@ model Flow {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+// ==================== SIKAYETVAR ====================
+
+model SikayetvarComplaint {
+  id          String   @id @default(uuid())
+  title       String
+  url         String   @unique
+  content     String   @default("")
+  answered    Boolean  @default(false)
+  answerNote  String   @default("")
+  pageNumber  Int      @default(1)
+  publishedAt DateTime?
+  firstSeenAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([answered])
+  @@index([firstSeenAt])
+  @@index([pageNumber])
+}

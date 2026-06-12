@@ -5,5 +5,8 @@ export async function register() {
 
     const { initializeActiveChannels } = await import("@/lib/channels/init");
     initializeActiveChannels();
+
+    const { startSikayetvarScheduler } = await import("@/lib/sikayetvar/scheduler");
+    startSikayetvarScheduler();
   }
 }

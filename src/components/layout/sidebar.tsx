@@ -24,6 +24,7 @@ import {
   Webhook,
   ChevronLeft,
   ChevronRight,
+  MessageCircleWarning,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -57,13 +58,18 @@ const sections: NavSection[] = [
       { name: "SLA Rules", href: "/sla", icon: Timer },
     ],
   },
-  {
-    title: "Channels",
-    items: [
-      { name: "Channels", href: "/channels", icon: Radio },
-      { name: "Webhooks", href: "/webhooks", icon: Webhook },
-    ],
-  },
+{
+  title: "Channels",
+  items: [
+    { name: "Channels", href: "/channels", icon: Radio },
+    { name: "Webhooks", href: "/webhooks", icon: Webhook },
+    {
+      name: "Şikayetvar",
+      href: "/sikayetvar",
+      icon: MessageCircleWarning,
+    },
+  ],
+},
   {
     title: "Insights",
     items: [
