@@ -232,9 +232,6 @@ export default function SikayetvarPage() {
                             >
                               {complaint.answered ? "Cevaplandı" : "Bekliyor"}
                             </span>
-                            <span className="text-xs text-owly-text-light">
-                              Sayfa {complaint.pageNumber}
-                            </span>
                           </div>
 
                           <p className="mt-1 text-sm font-medium text-owly-text line-clamp-2">

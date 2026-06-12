@@ -57,7 +57,14 @@ function absoluteUrl(href: string): string {
 
 function slugify(value: string): string {
   return decodeHtml(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/[\u00A0\u00AD\u200B\u200C\u200D\u2060\uFEFF]/g, "")
+    .replace(/[’'`´]/g, "")
+    .replace(/[“”„«»]/g, "")
+    .replace(/[–—−‐‑‒]/g, "-")
+    .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem")
     .replace(/ç/g, "c")
     .replace(/ğ/g, "g")
     .replace(/ı/g, "i")
@@ -77,8 +84,6 @@ function isComplaintUrl(url: string): boolean {
     if (parsed.hostname !== "www.sikayetvar.com") return false;
     if (parts.length !== 2) return false;
     if (parts[0] !== "dermoeczanem") return false;
-    if (parts[1].endsWith("-video")) return false;
-
     const excluded = new Set([
       "guvenilir",
       "sahte-urun",
@@ -96,6 +101,15 @@ function isComplaintUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isExcludedComplaintTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+
+  return [
+    "tüm şikayetler - şikayetvar",
+    "dermoeczanem şikayet ve yorumları - şikayetvar",
+  ].includes(normalized);
 }
 
 async function fetchHtml(url: string): Promise<string> {
@@ -157,6 +171,23 @@ function parsePublishedAt(html: string): Date | null {
   }
 
   return null;
+}
+
+function hasDermoeczanemAnswer(html: string): boolean {
+  if (
+    html.includes('data-ga-element="Complaint_Answer_Brand"') ||
+    html.includes("Complaint_Answer_Brand")
+  ) {
+    return true;
+  }
+
+  const messagesMatch = html.match(/<div[^>]+id=["']messages["'][\s\S]*?<\/div>\s*<\/div>/);
+
+  if (messagesMatch?.[0]) {
+    return messagesMatch[0].includes("Dermoeczanem");
+  }
+
+  return html.includes(">Dermoeczanem<") && html.includes('href="/dermoeczanem"');
 }
 
 async function scrollUntilAllComplaintCardsLoaded(
@@ -224,14 +255,15 @@ async function fetchComplaintDetail(
       /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i
     );
 
-    const canonicalUrl = canonicalMatch?.[1]
+    const possibleCanonicalUrl = canonicalMatch?.[1]
       ? absoluteUrl(canonicalMatch[1])
       : input.url;
 
-    const answered =
-      html.includes('id="messages"') ||
-      html.includes('data-ga-element="Complaint_Answer_Brand"') ||
-      html.includes("Complaint_Answer_Brand");
+    const canonicalUrl = isComplaintUrl(possibleCanonicalUrl)
+      ? possibleCanonicalUrl
+      : input.url;
+
+    const answered = hasDermoeczanemAnswer(html);
 
     let answerNote = "";
 
@@ -343,6 +375,48 @@ export async function scrapeSikayetvarComplaints(options?: {
           return value.replace(/\s+/g, " ").trim();
         }
 
+        function cleanTitleValue(value: string) {
+          return normalizeText(value)
+            .replace(
+              /\s*[A-ZÇĞİÖŞÜ][a-zçğıöşü]+\d{1,2}\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+\d{2}:\d{2}.*$/u,
+              ""
+            )
+            .replace(
+              /\s*\d{1,2}\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+\d{2}:\d{2}.*$/u,
+              ""
+            )
+            .trim();
+        }
+
+        function isExcludedTitle(value: string) {
+          const normalized = normalizeText(value);
+          return (
+            normalized === "Tüm Şikayetler - Şikayetvar" ||
+            normalized === "Dermoeczanem Şikayet ve Yorumları - Şikayetvar"
+          );
+        }
+
+        function localSlugify(value: string) {
+          return normalizeText(value)
+            .normalize("NFKD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[\u00A0\u00AD\u200B\u200C\u200D\u2060\uFEFF]/g, "")
+            .replace(/[’'`´]/g, "")
+            .replace(/[“”„«»]/g, "")
+            .replace(/[–—−‐‑‒]/g, "-")
+            .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem")
+            .replace(/ç/g, "c")
+            .replace(/ğ/g, "g")
+            .replace(/ı/g, "i")
+            .replace(/ö/g, "o")
+            .replace(/ş/g, "s")
+            .replace(/ü/g, "u")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 90);
+        }
+
         const excluded = [
           "/dermoeczanem/guvenilir",
           "/dermoeczanem/sahte-urun",
@@ -369,8 +443,6 @@ export async function scrapeSikayetvarComplaints(options?: {
 
               if (!href.includes("/dermoeczanem/")) return false;
               if (href.includes("?page=")) return false;
-              if (href.endsWith("-video")) return false;
-
               return !excluded.some((item) => href.endsWith(item));
             }) || null;
 
@@ -405,24 +477,30 @@ export async function scrapeSikayetvarComplaints(options?: {
 
           const removedText = `${customerName} şikayetini yayından kaldırdı`;
 
-          const title = removed
+          const rawTitle = removed
             ? removedText
-            : normalizeText(complaintLink?.title || "") ||
-              normalizeText(complaintLink?.getAttribute("aria-label") || "") ||
-              normalizeText(h3?.textContent || "") ||
+            : cleanTitleValue(complaintLink?.title || "") ||
+              cleanTitleValue(complaintLink?.getAttribute("aria-label") || "") ||
+              cleanTitleValue(h3?.textContent || "") ||
               quoteText ||
               paragraphText.slice(0, 100) ||
               `Şikayet ${currentPageNumber}-${index + 1}`;
 
-          const href =
-            complaintLink?.href ||
-            `sikayetvar://dermoeczanem/page-${currentPageNumber}/card-${index + 1}`;
+          const title = isExcludedTitle(rawTitle) ? "" : rawTitle;
+
+          const generatedSlug = localSlugify(title);
+
+          const href = complaintLink?.href
+            ? complaintLink.href
+            : removed
+              ? `sikayetvar://dermoeczanem/page-${currentPageNumber}/card-${index + 1}`
+              : `https://www.sikayetvar.com/dermoeczanem/${generatedSlug}`;
 
           return {
             index: index + 1,
             href,
             title,
-            content: removed ? removedText : paragraphText || quoteText || articleText,
+            content: removed ? removedText : paragraphText || quoteText || "",
             dateText,
             answered: removed || Boolean(solved),
             removed,
@@ -450,6 +528,8 @@ export async function scrapeSikayetvarComplaints(options?: {
 
         if (!url.startsWith("sikayetvar://") && !isComplaintUrl(url)) {
           rejectReason = "not_complaint_url";
+        } else if (isExcludedComplaintTitle(title)) {
+          rejectReason = "excluded_title";
         } else if (seenUrls.has(url)) {
           rejectReason = "duplicate_url";
         } else if (!title || title.length < 5) {
