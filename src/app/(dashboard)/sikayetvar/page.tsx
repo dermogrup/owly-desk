@@ -240,6 +240,7 @@ export default function SikayetvarPage() {
 
                           <p className="mt-1 text-xs text-owly-text-light">
                             İlk görüldü: {formatRelativeTime(complaint.firstSeenAt)}
+                            Sayfa: {complaint.pageNumber}
                           </p>
                         </div>
                       </div>

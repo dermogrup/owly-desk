@@ -14,6 +14,8 @@ type ScrapedComplaint = {
   publishedAt?: Date | null;
   answered?: boolean;
   answerNote?: string;
+  generated?: boolean;
+  invalidBrand?: boolean;
 };
 
 type SyncResult = {
@@ -55,8 +57,8 @@ function absoluteUrl(href: string): string {
   return `${SITE_ORIGIN}/${href}`;
 }
 
-function slugify(value: string): string {
-  return decodeHtml(value)
+function slugify(value: string, options?: { joinSlash?: boolean }): string {
+  let normalized = decodeHtml(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -64,7 +66,17 @@ function slugify(value: string): string {
     .replace(/[’'`´]/g, "")
     .replace(/[“”„«»]/g, "")
     .replace(/[–—−‐‑‒]/g, "-")
-    .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem")
+    .replace(/dermoeczanem\s*\.\s*com/g, "dermoeczanemcom")
+    .replace(/dermo\s*[- ]\s*eczanem\s*\.\s*com/g, "dermoeczanemcom")
+    .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem");
+
+  if (options?.joinSlash) {
+    normalized = normalized.replace(/\s*\/\s*/g, "");
+  } else {
+    normalized = normalized.replace(/\s*\/\s*/g, "-");
+  }
+
+  return normalized
     .replace(/ç/g, "c")
     .replace(/ğ/g, "g")
     .replace(/ı/g, "i")
@@ -74,6 +86,13 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 90);
+}
+
+function generatedComplaintUrlFromTitle(
+  title: string,
+  options?: { joinSlash?: boolean }
+): string {
+  return `${SITE_ORIGIN}/dermoeczanem/${slugify(title, options)}`;
 }
 
 function isComplaintUrl(url: string): boolean {
@@ -233,6 +252,116 @@ async function scrollUntilAllComplaintCardsLoaded(
   });
 }
 
+async function parseComplaintDetailHtml(
+  input: ScrapedComplaint,
+  html: string,
+  fallbackUrl: string
+): Promise<ScrapedComplaint> {
+  const title = extractMetaContent(html, "og:title") || input.title;
+
+  const description =
+    extractMetaContent(html, "description") ||
+    extractMetaContent(html, "og:description") ||
+    input.content ||
+    "";
+
+  const canonicalMatch = html.match(
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i
+  );
+
+  const possibleCanonicalUrl = canonicalMatch?.[1]
+    ? absoluteUrl(canonicalMatch[1])
+    : fallbackUrl;
+
+  if (!isComplaintUrl(possibleCanonicalUrl)) {
+    return {
+      ...input,
+      invalidBrand: true,
+    };
+  }
+
+  const canonicalUrl = possibleCanonicalUrl;
+
+  const answered = hasDermoeczanemAnswer(html);
+
+  let answerNote = "";
+
+  if (answered) {
+    const answerMatch = html.match(
+      /data-ga-element=["']Complaint_Answer_Brand["'][\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i
+    );
+
+    if (answerMatch?.[1]) {
+      answerNote = stripHtml(answerMatch[1]);
+    }
+  }
+
+  return {
+    ...input,
+    title,
+    url: canonicalUrl,
+    content: description,
+    publishedAt: parsePublishedAt(html),
+    answered,
+    answerNote,
+  };
+}
+
+function uniqueValues(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function buildGeneratedUrlCandidates(input: ScrapedComplaint): string[] {
+  if (!input.generated) return [];
+
+  const baseUrls = uniqueValues([
+    input.url,
+    generatedComplaintUrlFromTitle(input.title),
+    input.title.includes("/")
+      ? generatedComplaintUrlFromTitle(input.title, { joinSlash: true })
+      : "",
+  ]);
+
+  const candidates: string[] = [];
+
+  for (const baseUrl of baseUrls) {
+    const normalizedBase = baseUrl.replace(/-video$/, "");
+
+    candidates.push(normalizedBase);
+    candidates.push(`${normalizedBase}-video`);
+
+    for (let suffix = 2; suffix <= 30; suffix += 1) {
+      candidates.push(`${normalizedBase}-${suffix}`);
+      candidates.push(`${normalizedBase}-${suffix}-video`);
+    }
+  }
+
+  return uniqueValues(candidates);
+}
+
+async function fetchFirstValidGeneratedDetail(
+  input: ScrapedComplaint,
+  alreadyTried: Set<string>
+): Promise<ScrapedComplaint | null> {
+  for (const candidateUrl of buildGeneratedUrlCandidates(input)) {
+    if (alreadyTried.has(candidateUrl)) continue;
+    alreadyTried.add(candidateUrl);
+
+    try {
+      const html = await fetchHtml(candidateUrl);
+      const parsed = await parseComplaintDetailHtml(input, html, candidateUrl);
+
+      if (!parsed.invalidBrand) {
+        return parsed;
+      }
+    } catch {
+      // Try next generated candidate.
+    }
+  }
+
+  return null;
+}
+
 async function fetchComplaintDetail(
   input: ScrapedComplaint
 ): Promise<ScrapedComplaint> {
@@ -240,53 +369,45 @@ async function fetchComplaintDetail(
     return input;
   }
 
+  const triedUrls = new Set<string>();
+  triedUrls.add(input.url);
+
   try {
     const html = await fetchHtml(input.url);
+    const parsed = await parseComplaintDetailHtml(input, html, input.url);
 
-    const title = extractMetaContent(html, "og:title") || input.title;
-
-    const description =
-      extractMetaContent(html, "description") ||
-      extractMetaContent(html, "og:description") ||
-      input.content ||
-      "";
-
-    const canonicalMatch = html.match(
-      /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i
-    );
-
-    const possibleCanonicalUrl = canonicalMatch?.[1]
-      ? absoluteUrl(canonicalMatch[1])
-      : input.url;
-
-    const canonicalUrl = isComplaintUrl(possibleCanonicalUrl)
-      ? possibleCanonicalUrl
-      : input.url;
-
-    const answered = hasDermoeczanemAnswer(html);
-
-    let answerNote = "";
-
-    if (answered) {
-      const answerMatch = html.match(
-        /data-ga-element=["']Complaint_Answer_Brand["'][\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i
-      );
-
-      if (answerMatch?.[1]) {
-        answerNote = stripHtml(answerMatch[1]);
-      }
+    if (!parsed.invalidBrand) {
+      return parsed;
     }
+
+    const validGeneratedDetail = await fetchFirstValidGeneratedDetail(input, triedUrls);
+    if (validGeneratedDetail) return validGeneratedDetail;
+
+    logger.info(
+      `[Şikayetvar] Detail canonical is not Dermoeczanem, skipping url=${input.url}`
+    );
 
     return {
       ...input,
-      title,
-      url: canonicalUrl,
-      content: description,
-      publishedAt: parsePublishedAt(html),
-      answered,
-      answerNote,
+      invalidBrand: true,
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (message.includes("410 Gone") || message.includes("404")) {
+      const validGeneratedDetail = await fetchFirstValidGeneratedDetail(input, triedUrls);
+      if (validGeneratedDetail) return validGeneratedDetail;
+
+      logger.info(
+        `[Şikayetvar] Detail unavailable, using list content url=${input.url}`
+      );
+
+      return {
+        ...input,
+        content: input.content || input.title,
+      };
+    }
+
     logger.error(`[Şikayetvar] Failed to fetch detail url=${input.url}`, error);
     return input;
   }
@@ -396,8 +517,8 @@ export async function scrapeSikayetvarComplaints(options?: {
           );
         }
 
-        function localSlugify(value: string) {
-          return normalizeText(value)
+        function localSlugify(value: string, options?: { joinSlash?: boolean }) {
+          let normalized = normalizeText(value)
             .normalize("NFKD")
             .replace(/[\u0300-\u036f]/g, "")
             .toLowerCase()
@@ -405,7 +526,17 @@ export async function scrapeSikayetvarComplaints(options?: {
             .replace(/[’'`´]/g, "")
             .replace(/[“”„«»]/g, "")
             .replace(/[–—−‐‑‒]/g, "-")
-            .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem")
+            .replace(/dermoeczanem\s*\.\s*com/g, "dermoeczanemcom")
+            .replace(/dermo\s*[- ]\s*eczanem\s*\.\s*com/g, "dermoeczanemcom")
+            .replace(/dermo\s*[- ]\s*eczanem/g, "dermoeczanem");
+
+          if (options?.joinSlash) {
+            normalized = normalized.replace(/\s*\/\s*/g, "");
+          } else {
+            normalized = normalized.replace(/\s*\/\s*/g, "-");
+          }
+
+          return normalized
             .replace(/ç/g, "c")
             .replace(/ğ/g, "g")
             .replace(/ı/g, "i")
@@ -464,6 +595,32 @@ export async function scrapeSikayetvarComplaints(options?: {
           ) as HTMLElement | null;
 
           const articleText = normalizeText(article.textContent || "");
+          const primaryLink = h3?.querySelector("a[href]") as HTMLAnchorElement | null;
+          const primaryHref = primaryLink?.getAttribute("href") || "";
+
+          let primaryPathParts: string[] = [];
+          try {
+            primaryPathParts = new URL(primaryHref, window.location.origin).pathname
+              .split("/")
+              .filter(Boolean);
+          } catch {
+            primaryPathParts = [];
+          }
+
+          const primaryIsForeignComplaint =
+            primaryPathParts.length >= 2 &&
+            primaryPathParts[0] !== "dermoeczanem" &&
+            primaryPathParts[0] !== "sikayetler";
+
+          const hasDermoeczanemLink = allLinks.some((link) => {
+            const href = link.getAttribute("href") || "";
+            return (
+              href === "/dermoeczanem" ||
+              href.startsWith("/dermoeczanem/") ||
+              href === "https://www.sikayetvar.com/dermoeczanem" ||
+              href.startsWith("https://www.sikayetvar.com/dermoeczanem/")
+            );
+          });
           const paragraphText = normalizeText(paragraph?.textContent || "");
           const quoteText = normalizeText(quote?.textContent || "");
           const dateText = dateEl?.getAttribute("aria-label") || "";
@@ -496,6 +653,13 @@ export async function scrapeSikayetvarComplaints(options?: {
               ? `sikayetvar://dermoeczanem/page-${currentPageNumber}/card-${index + 1}`
               : `https://www.sikayetvar.com/dermoeczanem/${generatedSlug}`;
 
+          const brandMatched =
+            !primaryIsForeignComplaint &&
+            (Boolean(complaintLink) ||
+              removed ||
+              hasDermoeczanemLink ||
+              articleText.includes("Dermoeczanem"));
+
           return {
             index: index + 1,
             href,
@@ -505,6 +669,7 @@ export async function scrapeSikayetvarComplaints(options?: {
             answered: removed || Boolean(solved),
             removed,
             generated: !complaintLink,
+            brandMatched,
           };
         });
       }, pageNumber);
@@ -556,6 +721,7 @@ export async function scrapeSikayetvarComplaints(options?: {
           pageNumber,
           publishedAt: null,
           answered: item.answered,
+          generated: item.generated,
         });
       }
 
@@ -572,7 +738,12 @@ export async function scrapeSikayetvarComplaints(options?: {
 
       if (fetchDetails) {
         for (const complaint of newComplaints) {
-          all.push(await fetchComplaintDetail(complaint));
+          const detailedComplaint = await fetchComplaintDetail(complaint);
+
+          if (!detailedComplaint.invalidBrand) {
+            all.push(detailedComplaint);
+          }
+
           await delay(400);
         }
       } else {
@@ -588,6 +759,7 @@ export async function scrapeSikayetvarComplaints(options?: {
   const unique = new Map<string, ScrapedComplaint>();
 
   for (const item of all) {
+    if (item.invalidBrand) continue;
     unique.set(item.url, item);
   }
 
@@ -632,6 +804,8 @@ export async function fetchAndStoreSikayetvarComplaints(options?: {
     };
 
     for (const complaint of complaints) {
+      if (complaint.invalidBrand) continue;
+
       const existing = await prisma.sikayetvarComplaint.findUnique({
         where: { url: complaint.url },
       });
