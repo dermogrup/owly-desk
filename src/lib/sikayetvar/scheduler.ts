@@ -18,7 +18,7 @@ const schedulerState =
     lastRunKeys: new Set<string>(),
   });
 
-const DEFAULT_TIMES = ["08:30", "13:00", "17:00"];
+const DEFAULT_TIMES = ["08:30", "13:27", "17:00"];
 
 function getIstanbulDateParts() {
   const formatter = new Intl.DateTimeFormat("tr-TR", {
@@ -55,7 +55,12 @@ function getScheduleTimes(): string[] {
 async function runScheduledSync(runKey: string) {
   try {
     logger.info(`[Şikayetvar] Scheduled sync started key=${runKey}`);
-    await fetchAndStoreSikayetvarComplaints({ fetchDetails: true });
+    await fetchAndStoreSikayetvarComplaints({
+      maxPages: 1,
+      fetchDetails: true,
+      notify: true,
+      duplicateMode: "url_or_title",
+    });
     logger.info(`[Şikayetvar] Scheduled sync finished key=${runKey}`);
   } catch (error) {
     logger.error(`[Şikayetvar] Scheduled sync failed key=${runKey}`, error);

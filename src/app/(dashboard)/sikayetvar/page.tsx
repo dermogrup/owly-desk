@@ -4,6 +4,7 @@ import { Header } from "@/components/layout/header";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { CheckCircle2, Circle, ExternalLink, RefreshCw, Search, MessageCircleWarning } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Complaint = {
   id: string;
@@ -16,6 +17,7 @@ type Complaint = {
   publishedAt: string | null;
   firstSeenAt: string;
   updatedAt: string;
+  isNew: boolean;
 };
 
 const filters = [
@@ -25,6 +27,8 @@ const filters = [
 ];
 
 export default function SikayetvarPage() {
+  const searchParams = useSearchParams();
+  const selectedComplaintIdFromUrl = searchParams.get("id");
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -54,8 +58,19 @@ export default function SikayetvarPage() {
       const res = await fetch(`/api/sikayetvar?${params.toString()}`);
       if (!res.ok) throw new Error("Şikayetvar kayıtları yüklenemedi");
 
-      const data = await res.json();
-      setComplaints(data.data || []);
+const data = await res.json();
+
+const ordered = [...(data.data || [])].sort((a, b) => {
+  if (a.isNew && !b.isNew) return -1;
+  if (!a.isNew && b.isNew) return 1;
+
+  return (
+    new Date(a.firstSeenAt).getTime() -
+    new Date(b.firstSeenAt).getTime()
+  );
+});
+
+setComplaints(ordered);
     } catch (err) {
       console.error(err);
       setError("Şikayetvar kayıtları yüklenemedi.");
@@ -68,6 +83,43 @@ export default function SikayetvarPage() {
     fetchComplaints();
   }, [fetchComplaints]);
 
+  useEffect(() => {
+    if (selectedComplaintIdFromUrl) {
+      setSelectedId(selectedComplaintIdFromUrl);
+    }
+  }, [selectedComplaintIdFromUrl]);
+
+  useEffect(() => {
+    const eventSource = new EventSource("/api/realtime?channel=global");
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+
+        if (
+          payload?.type === "notification" &&
+          payload?.data?.source === "sikayetvar"
+        ) {
+          fetchComplaints();
+
+          if (payload.data.sikayetvarComplaintId) {
+            setSelectedId(payload.data.sikayetvarComplaintId);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to parse Sikayetvar realtime event:", error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error("Sikayetvar SSE connection error:", error);
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [fetchComplaints]);
+
   const handleSync = async () => {
     if (syncing) return;
     setSyncing(true);
@@ -76,7 +128,9 @@ export default function SikayetvarPage() {
       const res = await fetch("/api/sikayetvar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          maxPages: 1,
+        }),
       });
 
       if (!res.ok) throw new Error("Senkronizasyon başarısız");
@@ -240,7 +294,7 @@ export default function SikayetvarPage() {
 
                           <p className="mt-1 text-xs text-owly-text-light">
                             İlk görüldü: {formatRelativeTime(complaint.firstSeenAt)}
-                            Sayfa: {complaint.pageNumber}
+                            {/* Sayfa: {complaint.pageNumber} */}
                           </p>
                         </div>
                       </div>
@@ -285,7 +339,7 @@ export default function SikayetvarPage() {
                   </h2>
                 </div>
 
-                {selectedComplaint.url.startsWith("http") && (
+                {!selectedComplaint.answered && selectedComplaint.url.startsWith("http") && (
                   <a
                     href={selectedComplaint.url}
                     target="_blank"

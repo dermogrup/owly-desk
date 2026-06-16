@@ -416,7 +416,7 @@ function EmailCard({
 
   const handleTest = async () => {
     setTestResult(null);
-    onAction("email", "test");
+	onAction("email", "send-test-email");
     setTestResult("Test initiated - check server logs for results");
     setTimeout(() => setTestResult(null), 4000);
   };

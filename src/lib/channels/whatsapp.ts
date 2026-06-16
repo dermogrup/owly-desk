@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { chat, createNewConversation } from "@/lib/ai/engine";
 import { logger } from "@/lib/logger";
 import { resolveCustomer } from "@/lib/customer-resolver";
-import { emitNewMessage, emitConversationUpdate } from "@/lib/realtime";
+import { emitNewMessage, emitConversationUpdate, publish } from "@/lib/realtime";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -355,6 +355,18 @@ emitNewMessage(conversation.id, {
 emitConversationUpdate(conversation.id, {
   lastMessage: messageContent,
   updatedAt: savedCustomerMsg.createdAt.toISOString(),
+});
+
+publish("global", {
+  type: "notification",
+  data: {
+    id: savedCustomerMsg.id,
+    source: "whatsapp",
+    title: "Yeni WhatsApp mesajı",
+    message: `${customerName}: ${messageContent}`,
+    conversationId: conversation.id,
+    url: `/conversations?conversationId=${conversation.id}`,
+  },
 });
 
 const fullConversation = await prisma.conversation.findUnique({

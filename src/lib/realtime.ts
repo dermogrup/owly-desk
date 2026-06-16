@@ -7,6 +7,7 @@
  */
 
 import { logger } from "@/lib/logger";
+import { prisma } from "@/lib/prisma";
 
 export type EventType =
   | "message:new"
@@ -92,6 +93,39 @@ function publishToChannel(channel: string, payload: EventPayload): void {
   }
 }
 
+async function saveNotificationToDatabase(payload: EventPayload): Promise<void> {
+  if (payload.type !== "notification") return;
+
+  try {
+    const title = String(payload.data.title || "Bildirim");
+    const content = String(
+      payload.data.message ||
+        payload.data.content ||
+        payload.data.title ||
+        ""
+    );
+    const source = String(payload.data.source || "system");
+    const conversationId = payload.data.conversationId
+      ? String(payload.data.conversationId)
+      : payload.conversationId
+        ? String(payload.conversationId)
+        : null;
+    const url = payload.data.url ? String(payload.data.url) : null;
+
+    await prisma.notification.create({
+      data: {
+        title,
+        content,
+        source,
+        conversationId,
+        url,
+      },
+    });
+  } catch (error) {
+    logger.error("[Realtime] Notification DB save failed", error);
+  }
+}
+
 export function publish(
   channel: string,
   event: Omit<EventPayload, "timestamp">
@@ -106,6 +140,10 @@ export function publish(
       payload.conversationId || ""
     }`
   );
+
+  if (payload.type === "notification") {
+    void saveNotificationToDatabase(payload);
+  }
 
   publishToChannel(channel, payload);
 

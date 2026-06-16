@@ -4,6 +4,8 @@ import { logger } from "@/lib/logger";
 import { requireAuth, isAuthenticated } from "@/lib/route-auth";
 import { fetchAndStoreSikayetvarComplaints } from "@/lib/sikayetvar/scraper";
 
+const NEW_COMPLAINT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request, "conversations:read");
   if (!isAuthenticated(auth)) return auth;
@@ -23,13 +25,28 @@ export async function GET(request: NextRequest) {
           ],
         }),
       },
-      orderBy: [
-        { pageNumber: "asc" },
-        { firstSeenAt: "asc" },
-      ],
+orderBy: [
+  { isNew: "desc" },
+  { firstSeenAt: "asc" },
+],
     });
 
-    return NextResponse.json({ data: complaints });
+    const now = Date.now();
+
+    const sortedComplaints = [...complaints].sort((a, b) => {
+      const aTime = a.firstSeenAt.getTime();
+      const bTime = b.firstSeenAt.getTime();
+
+      const aIsNew = aTime > now - NEW_COMPLAINT_WINDOW_MS;
+      const bIsNew = bTime > now - NEW_COMPLAINT_WINDOW_MS;
+
+      if (aIsNew && !bIsNew) return -1;
+      if (!aIsNew && bIsNew) return 1;
+
+      return aTime - bTime;
+    });
+
+    return NextResponse.json({ data: sortedComplaints });
   } catch (error) {
     logger.error("[Şikayetvar] Failed to list complaints", error);
     return NextResponse.json(
@@ -44,12 +61,14 @@ export async function POST(request: NextRequest) {
   if (!isAuthenticated(auth)) return auth;
 
   try {
-const body = await request.json().catch(() => ({}));
+    const body = await request.json().catch(() => ({}));
 
-const result = await fetchAndStoreSikayetvarComplaints({
-  ...(Number.isInteger(body.maxPages) && { maxPages: body.maxPages }),
-  fetchDetails: true,
-});
+    const result = await fetchAndStoreSikayetvarComplaints({
+      ...(Number.isInteger(body.maxPages) && { maxPages: body.maxPages }),
+      fetchDetails: true,
+      notify: false,
+      duplicateMode: "url",
+    });
 
     return NextResponse.json({ success: true, ...result });
   } catch (error) {

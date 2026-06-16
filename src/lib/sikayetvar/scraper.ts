@@ -88,11 +88,31 @@ function slugify(value: string, options?: { joinSlash?: boolean }): string {
     .slice(0, 90);
 }
 
+function normalizeKnownComplaintUrl(url: string, title?: string): string {
+  const normalizedTitle = decodeHtml(title || "").toLowerCase();
+
+  if (
+    normalizedTitle.includes("dermoeczanem.com güvenlik açığı") ||
+    normalizedTitle.includes("dermoeczanemcom güvenlik açığı") ||
+    url.includes("/dermoeczanem/dermoeczanem-com-guvenlik-acigi")
+  ) {
+    return url.replace(
+      "/dermoeczanem/dermoeczanem-com-guvenlik-acigi",
+      "/dermoeczanem/dermoeczanemcom-guvenlik-acigi"
+    );
+  }
+
+  return url;
+}
+
 function generatedComplaintUrlFromTitle(
   title: string,
   options?: { joinSlash?: boolean }
 ): string {
-  return `${SITE_ORIGIN}/dermoeczanem/${slugify(title, options)}`;
+  return normalizeKnownComplaintUrl(
+    `${SITE_ORIGIN}/dermoeczanem/${slugify(title, options)}`,
+    title
+  );
 }
 
 function isComplaintUrl(url: string): boolean {
@@ -193,20 +213,11 @@ function parsePublishedAt(html: string): Date | null {
 }
 
 function hasDermoeczanemAnswer(html: string): boolean {
-  if (
+  return (
     html.includes('data-ga-element="Complaint_Answer_Brand"') ||
+    html.includes("data-ga-element='Complaint_Answer_Brand'") ||
     html.includes("Complaint_Answer_Brand")
-  ) {
-    return true;
-  }
-
-  const messagesMatch = html.match(/<div[^>]+id=["']messages["'][\s\S]*?<\/div>\s*<\/div>/);
-
-  if (messagesMatch?.[0]) {
-    return messagesMatch[0].includes("Dermoeczanem");
-  }
-
-  return html.includes(">Dermoeczanem<") && html.includes('href="/dermoeczanem"');
+  );
 }
 
 async function scrollUntilAllComplaintCardsLoaded(
@@ -280,7 +291,7 @@ async function parseComplaintDetailHtml(
     };
   }
 
-  const canonicalUrl = possibleCanonicalUrl;
+  const canonicalUrl = normalizeKnownComplaintUrl(possibleCanonicalUrl, title);
 
   const answered = hasDermoeczanemAnswer(html);
 
@@ -325,7 +336,10 @@ function buildGeneratedUrlCandidates(input: ScrapedComplaint): string[] {
   const candidates: string[] = [];
 
   for (const baseUrl of baseUrls) {
-    const normalizedBase = baseUrl.replace(/-video$/, "");
+    const normalizedBase = normalizeKnownComplaintUrl(
+      baseUrl.replace(/-video$/, ""),
+      input.title
+    );
 
     candidates.push(normalizedBase);
     candidates.push(`${normalizedBase}-video`);
@@ -626,10 +640,6 @@ export async function scrapeSikayetvarComplaints(options?: {
           const dateText = dateEl?.getAttribute("aria-label") || "";
           const customerName = customerEl?.getAttribute("aria-label") || "Kullanıcı";
 
-          const solved =
-            articleText.includes("Çözüldü") ||
-            Boolean(article.querySelector('[data-ga-element="Complaint_Card_Solved"]'));
-
           const removed = articleText.includes("şikayetini yayından kaldırdı");
 
           const removedText = `${customerName} şikayetini yayından kaldırdı`;
@@ -666,7 +676,7 @@ export async function scrapeSikayetvarComplaints(options?: {
             title,
             content: removed ? removedText : paragraphText || quoteText || "",
             dateText,
-            answered: removed || Boolean(solved),
+            answered: removed,
             removed,
             generated: !complaintLink,
             brandMatched,
@@ -684,7 +694,10 @@ export async function scrapeSikayetvarComplaints(options?: {
         const rawHref = item.href || "";
         const url = rawHref.startsWith("sikayetvar://")
           ? rawHref
-          : rawHref.split("?")[0].replace(/\/$/, "");
+          : normalizeKnownComplaintUrl(
+              rawHref.split("?")[0].replace(/\/$/, ""),
+              item.title || ""
+            );
 
         const title = decodeHtml(item.title || "");
         const content = decodeHtml(item.content || "");
@@ -756,12 +769,19 @@ export async function scrapeSikayetvarComplaints(options?: {
     await browser.close();
   }
 
-  const unique = new Map<string, ScrapedComplaint>();
+const unique = new Map<string, ScrapedComplaint>();
 
-  for (const item of all) {
-    if (item.invalidBrand) continue;
-    unique.set(item.url, item);
-  }
+for (const item of all) {
+  if (item.invalidBrand) continue;
+
+  const uniqueKey = [
+    item.url,
+    item.title,
+    item.pageNumber,
+  ].join("::");
+
+  unique.set(uniqueKey, item);
+}
 
   logger.info(`[Şikayetvar] Total unique complaints=${unique.size}`);
 
@@ -777,6 +797,8 @@ const sikayetvarSyncState = globalForSikayetvarSync;
 export async function fetchAndStoreSikayetvarComplaints(options?: {
   maxPages?: number;
   fetchDetails?: boolean;
+  notify?: boolean;
+  duplicateMode?: "url" | "url_or_title";
 }): Promise<SyncResult> {
   if (sikayetvarSyncState.__sikayetvarSyncRunning) {
     logger.info(
@@ -806,8 +828,22 @@ export async function fetchAndStoreSikayetvarComplaints(options?: {
     for (const complaint of complaints) {
       if (complaint.invalidBrand) continue;
 
-      const existing = await prisma.sikayetvarComplaint.findUnique({
-        where: { url: complaint.url },
+const duplicateMode = options?.duplicateMode ?? "url";
+
+const existing =
+  duplicateMode === "url_or_title"
+    ? await prisma.sikayetvarComplaint.findFirst({
+        where: {
+          OR: [
+            { url: complaint.url },
+            { title: complaint.title },
+          ],
+        },
+      })
+    : await prisma.sikayetvarComplaint.findUnique({
+        where: {
+          url: complaint.url,
+        },
       });
 
       if (existing) {
@@ -834,18 +870,22 @@ export async function fetchAndStoreSikayetvarComplaints(options?: {
 
         continue;
       }
+      logger.info(
+  `[Şikayetvar] Creating complaint notify=${String(options?.notify)} duplicateMode=${options?.duplicateMode || "-"} isNew=${String(options?.notify === true)} title=${complaint.title}`
+);
 
-      const created = await prisma.sikayetvarComplaint.create({
-        data: {
-          title: complaint.title,
-          url: complaint.url,
-          content: complaint.content ?? "",
-          pageNumber: complaint.pageNumber,
-          publishedAt: complaint.publishedAt ?? null,
-          answered: complaint.answered ?? false,
-          answerNote: complaint.answerNote ?? "",
-        },
-      });
+const created = await prisma.sikayetvarComplaint.create({
+  data: {
+    title: complaint.title,
+    url: complaint.url,
+    content: complaint.content ?? "",
+    pageNumber: complaint.pageNumber,
+    publishedAt: complaint.publishedAt ?? null,
+    answered: complaint.answered ?? false,
+    answerNote: complaint.answerNote ?? "",
+    isNew: options?.notify === true,
+  },
+});
 
       result.created += 1;
 
@@ -856,16 +896,20 @@ export async function fetchAndStoreSikayetvarComplaints(options?: {
         isNew: true,
       });
 
-      publish("global", {
-        type: "notification",
-        data: {
-          source: "sikayetvar",
-          title: "Yeni Şikayetvar şikayeti",
-          message: created.title,
-          url: created.url,
-          sikayetvarComplaintId: created.id,
-        },
-      });
+      if (options?.notify !== false) {
+        publish("global", {
+          type: "notification",
+          data: {
+            id: created.id,
+            source: "sikayetvar",
+            title: "Yeni Şikayetvar şikayeti",
+            message: created.title,
+            url: `/sikayetvar?id=${created.id}`,
+            externalUrl: created.url,
+            sikayetvarComplaintId: created.id,
+          },
+        });
+      }
     }
 
     logger.info(

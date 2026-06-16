@@ -10,38 +10,38 @@ datasource db {
 // ==================== SETTINGS ====================
 
 model Settings {
-  id              String   @id @default("default")
-  businessName    String   @default("My Business")
-  businessDesc    String   @default("")
-  welcomeMessage  String   @default("Hello! How can I help you today?")
-  tone            String   @default("friendly")
-  language        String   @default("auto")
-  aiProvider      String   @default("openai")
-  aiModel         String   @default("gpt-4o-mini")
-  aiApiKey        String   @default("")
-  aiBaseUrl       String   @default("")
-  maxTokens       Int      @default(2048)
-  temperature     Float    @default(0.7)
-  elevenLabsKey   String   @default("")
-  elevenLabsVoice String   @default("")
-  twilioSid       String   @default("")
-  twilioToken     String   @default("")
-  twilioPhone     String   @default("")
-  smtpHost        String   @default("")
-  smtpPort        Int      @default(587)
-  smtpUser        String   @default("")
-  smtpPass        String   @default("")
-  smtpFrom        String   @default("")
-  imapHost        String   @default("")
-  imapPort        Int      @default(993)
-  imapUser        String   @default("")
-  imapPass        String   @default("")
-  whatsappMode    String   @default("web")
-  whatsappApiKey      String   @default("")
-  whatsappPhone       String   @default("")
-  telegramBotToken    String   @default("")
-  createdAt           DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String   @id @default("default")
+  businessName     String   @default("My Business")
+  businessDesc     String   @default("")
+  welcomeMessage   String   @default("Hello! How can I help you today?")
+  tone             String   @default("friendly")
+  language         String   @default("auto")
+  aiProvider       String   @default("openai")
+  aiModel          String   @default("gpt-4o-mini")
+  aiApiKey         String   @default("")
+  aiBaseUrl        String   @default("")
+  maxTokens        Int      @default(2048)
+  temperature      Float    @default(0.7)
+  elevenLabsKey    String   @default("")
+  elevenLabsVoice  String   @default("")
+  twilioSid        String   @default("")
+  twilioToken      String   @default("")
+  twilioPhone      String   @default("")
+  smtpHost         String   @default("")
+  smtpPort         Int      @default(587)
+  smtpUser         String   @default("")
+  smtpPass         String   @default("")
+  smtpFrom         String   @default("")
+  imapHost         String   @default("")
+  imapPort         Int      @default(993)
+  imapUser         String   @default("")
+  imapPass         String   @default("")
+  whatsappMode     String   @default("web")
+  whatsappApiKey   String   @default("")
+  whatsappPhone    String   @default("")
+  telegramBotToken String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 // ==================== AUTH ====================
@@ -135,6 +135,7 @@ model Conversation {
   tickets         Ticket[]
   tags            ConversationTag[]
   notes           InternalNote[]
+  notifications   Notification[]
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
@@ -282,8 +283,8 @@ model WebhookDelivery {
 
 model ActivityLog {
   id          String   @id @default(uuid())
-  action      String   // conversation.created, ticket.assigned, settings.updated, etc.
-  entity      String   // conversation, ticket, settings, knowledge, team
+  action      String // conversation.created, ticket.assigned, settings.updated, etc.
+  entity      String // conversation, ticket, settings, knowledge, team
   entityId    String?
   description String
   userId      String?
@@ -316,15 +317,15 @@ model SLARule {
 // ==================== CANNED RESPONSES ====================
 
 model CannedResponse {
-  id        String   @id @default(uuid())
-  title     String
-  content   String
-  category  String   @default("General")
-  shortcut  String   @default("") // e.g., /greeting, /refund
-  isActive  Boolean  @default(true)
-  usageCount Int     @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  title      String
+  content    String
+  category   String   @default("General")
+  shortcut   String   @default("") // e.g., /greeting, /refund
+  isActive   Boolean  @default(true)
+  usageCount Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 // ==================== CUSTOMERS ====================
@@ -365,45 +366,45 @@ model CustomerNote {
 // ==================== AUTOMATION RULES ====================
 
 model AutomationRule {
-  id          String   @id @default(uuid())
-  name        String
-  description String   @default("")
-  type        String   // auto_route, auto_tag, auto_reply, keyword_alert
-  isActive    Boolean  @default(true)
-  conditions  Json     @default("[]") // [{field, operator, value}]
-  actions     Json     @default("[]") // [{type, target, value}]
-  priority    Int      @default(0)
-  triggerCount Int     @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(uuid())
+  name         String
+  description  String   @default("")
+  type         String // auto_route, auto_tag, auto_reply, keyword_alert
+  isActive     Boolean  @default(true)
+  conditions   Json     @default("[]") // [{field, operator, value}]
+  actions      Json     @default("[]") // [{type, target, value}]
+  priority     Int      @default(0)
+  triggerCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 // ==================== BUSINESS HOURS ====================
 
 model BusinessHours {
-  id        String  @id @default("default")
-  enabled   Boolean @default(false)
-  timezone  String  @default("UTC")
-  monday    String  @default("09:00-18:00") // empty = closed
-  tuesday   String  @default("09:00-18:00")
-  wednesday String  @default("09:00-18:00")
-  thursday  String  @default("09:00-18:00")
-  friday    String  @default("09:00-18:00")
-  saturday  String  @default("")
-  sunday    String  @default("")
-  offlineMessage String @default("We are currently offline. We will get back to you during business hours.")
+  id             String  @id @default("default")
+  enabled        Boolean @default(false)
+  timezone       String  @default("UTC")
+  monday         String  @default("09:00-18:00") // empty = closed
+  tuesday        String  @default("09:00-18:00")
+  wednesday      String  @default("09:00-18:00")
+  thursday       String  @default("09:00-18:00")
+  friday         String  @default("09:00-18:00")
+  saturday       String  @default("")
+  sunday         String  @default("")
+  offlineMessage String  @default("We are currently offline. We will get back to you during business hours.")
 }
 
 // ==================== API KEYS ====================
 
 model ApiKey {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   name      String
-  key       String   @unique
-  isActive  Boolean  @default(true)
+  key       String    @unique
+  isActive  Boolean   @default(true)
   lastUsed  DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([key])
 }
@@ -424,49 +425,69 @@ model InternalNote {
 // ==================== CAMPAIGNS ====================
 
 model Campaign {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   name        String
-  description String   @default("")
-  channel     String   @default("email")
+  description String    @default("")
+  channel     String    @default("email")
   message     String
-  subject     String   @default("")
-  segments    Json     @default("[]")
-  status      String   @default("draft") // draft, scheduled, running, completed, paused
+  subject     String    @default("")
+  segments    Json      @default("[]")
+  status      String    @default("draft") // draft, scheduled, running, completed, paused
   scheduledAt DateTime?
-  sentCount   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  sentCount   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 // ==================== FLOWS ====================
 
 model Flow {
-  id          String   @id @default(uuid())
-  name        String
-  description String   @default("")
-  startNodeId String   @default("")
-  nodes       Json     @default("[]")
-  isActive    Boolean  @default(false)
-  triggerCount Int     @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(uuid())
+  name         String
+  description  String   @default("")
+  startNodeId  String   @default("")
+  nodes        Json     @default("[]")
+  isActive     Boolean  @default(false)
+  triggerCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 // ==================== SIKAYETVAR ====================
 
 model SikayetvarComplaint {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   title       String
-  url         String   @unique
-  content     String   @default("")
-  answered    Boolean  @default(false)
-  answerNote  String   @default("")
-  pageNumber  Int      @default(1)
+  url         String    @unique
+  content     String    @default("")
+  answered    Boolean   @default(false)
+  answerNote  String    @default("")
+  pageNumber  Int       @default(1)
   publishedAt DateTime?
-  firstSeenAt DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  firstSeenAt DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  isNew       Boolean   @default(false)
 
   @@index([answered])
   @@index([firstSeenAt])
   @@index([pageNumber])
+}
+
+model Notification {
+  id      String @id @default(cuid())
+  title   String
+  content String
+  source  String
+
+  conversationId String?
+  url            String?
+
+  isRead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([isRead])
+  @@index([createdAt])
 }
